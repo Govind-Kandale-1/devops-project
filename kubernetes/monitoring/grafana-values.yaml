@@ -1,0 +1,29 @@
+grafana:
+  adminPassword: "changeme"
+  persistence:
+    enabled: true
+    storageClassName: gp2
+    size: 5Gi
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      node-exporter:
+        gnetId: 1860
+        revision: 31
+        datasource: Prometheus
+      app-dashboard:
+        url: https://raw.githubusercontent.com/Govind-Kandale-1/devops-project/main/monitoring/grafana/dashboards/app-dashboard.json

@@ -1,7 +1,7 @@
 resource "aws_security_group" "web_sg" {
-  name        = "web-sg"
+  name        = "web-sg-${var.environment}"
   description = "Allow HTTP/HTTPS from internet"
-  vpc_id      = aws_vpc.test_vpc.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description      = "HTTP from anywhere"
@@ -30,15 +30,15 @@ resource "aws_security_group" "web_sg" {
   }
 
   tags = {
-    Name = "web-sg"
+    Name        = "web-sg"
+    Environment = var.environment
   }
 }
 
-# Application Security Group (for app instances)
 resource "aws_security_group" "app_sg" {
-  name        = "app-sg"
-  description = "Allow traffic from web security group and outbound to DB"
-  vpc_id      = aws_vpc.main.id
+  name        = "app-sg-${var.environment}"
+  description = "Allow traffic from web security group"
+  vpc_id      = var.vpc_id
 
   ingress {
     description     = "Allow HTTP from web security group"
@@ -65,18 +65,18 @@ resource "aws_security_group" "app_sg" {
   }
 
   tags = {
-    Name = "app-sg"
+    Name        = "app-sg"
+    Environment = var.environment
   }
 }
 
-# Database Security Group (for RDS)
 resource "aws_security_group" "db_sg" {
-  name        = "db-sg"
+  name        = "db-sg-${var.environment}"
   description = "Allow DB traffic from app security group"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = var.vpc_id
 
   ingress {
-    description     = "Allow MySQL (3306) from app security group"
+    description     = "Allow MySQL from app security group"
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
@@ -92,6 +92,7 @@ resource "aws_security_group" "db_sg" {
   }
 
   tags = {
-    Name = "db-sg"
+    Name        = "db-sg"
+    Environment = var.environment
   }
 }
