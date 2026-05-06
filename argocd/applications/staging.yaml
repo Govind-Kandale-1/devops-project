@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devops-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: staging
+    project: devops-project
+spec:
+  project: devops-project
+
+  source:
+    repoURL: https://github.com/Govind-Kandale-1/devops-project
+    targetRevision: main
+    path: kubernetes/overlays/staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: app
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  # No automated sync — triggered manually via CI after approval gate
+
+  revisionHistoryLimit: 5

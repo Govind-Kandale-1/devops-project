@@ -48,80 +48,99 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  deploy-dev:
-    name: Deploy to Dev
+  update-image-tags:
+    name: Update Image Tags in Git
     needs: build
     runs-on: ubuntu-latest
-    environment: dev
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name devops-dev --region ${{ env.AWS_REGION }}
-
-      - name: Deploy to dev
+      - name: Install kustomize
         run: |
-          cd kubernetes/overlays/dev
-          kustomize edit set image app=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
-          kubectl apply -k .
-          kubectl rollout status deployment/dev-app -n app --timeout=120s
+          curl -sLO https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz
+          tar -xzf kustomize_v5.3.0_linux_amd64.tar.gz
+          sudo mv kustomize /usr/local/bin/
 
-  deploy-staging:
-    name: Deploy to Staging
-    needs: [build, deploy-dev]
+      - name: Update image tag in all overlays
+        run: |
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
+          for env in dev staging prod; do
+            cd kubernetes/overlays/$env
+            kustomize edit set image app=$IMAGE
+            cd ../../..
+          done
+
+      - name: Commit and push updated image tags
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add kubernetes/overlays/dev/kustomization.yaml \
+                  kubernetes/overlays/staging/kustomization.yaml \
+                  kubernetes/overlays/prod/kustomization.yaml
+          git diff --cached --quiet || git commit -m "ci: update image tag to ${{ needs.build.outputs.image_tag }}"
+          git push
+
+  # Dev is handled by ArgoCD auto-sync after the commit above.
+  # Staging and prod require manual approval via GitHub Environments,
+  # then ArgoCD is triggered to sync.
+
+  sync-staging:
+    name: Sync Staging via ArgoCD
+    needs: update-image-tags
     runs-on: ubuntu-latest
     environment: staging
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name devops-staging --region ${{ env.AWS_REGION }}
-
-      - name: Deploy to staging
+      - name: Install ArgoCD CLI
         run: |
-          cd kubernetes/overlays/staging
-          kustomize edit set image app=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
-          kubectl apply -k .
-          kubectl rollout status deployment/staging-app -n app --timeout=180s
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/
 
-  deploy-prod:
-    name: Deploy to Production
-    needs: [build, deploy-staging]
+      - name: Sync staging application
+        run: |
+          argocd app sync devops-staging \
+            --server ${{ secrets.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} \
+            --grpc-web \
+            --timeout 180 \
+            --prune
+          argocd app wait devops-staging \
+            --server ${{ secrets.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} \
+            --grpc-web \
+            --timeout 180 \
+            --health
+
+  sync-prod:
+    name: Sync Production via ArgoCD
+    needs: sync-staging
     runs-on: ubuntu-latest
     environment: prod
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name devops-prod --region ${{ env.AWS_REGION }}
-
-      - name: Deploy to prod
+      - name: Install ArgoCD CLI
         run: |
-          cd kubernetes/overlays/prod
-          kustomize edit set image app=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
-          kubectl apply -k .
-          kubectl rollout status deployment/prod-app -n app --timeout=300s
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/
+
+      - name: Sync prod application
+        run: |
+          argocd app sync devops-prod \
+            --server ${{ secrets.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} \
+            --grpc-web \
+            --timeout 300 \
+            --prune
+          argocd app wait devops-prod \
+            --server ${{ secrets.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} \
+            --grpc-web \
+            --timeout 300 \
+            --health

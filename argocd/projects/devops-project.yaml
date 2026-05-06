@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: devops-project
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Devops project - Flask app on EKS across dev/staging/prod
+
+  sourceRepos:
+    - https://github.com/Govind-Kandale-1/devops-project
+
+  destinations:
+    - namespace: app
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  roles:
+    - name: deployer
+      description: CI pipeline deploy role
+      policies:
+        - p, proj:devops-project:deployer, applications, sync, devops-project/*, allow
+        - p, proj:devops-project:deployer, applications, get, devops-project/*, allow
+      jwtTokens: []
+
+  orphanedResources:
+    warn: true

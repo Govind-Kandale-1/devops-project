@@ -1,26 +1,34 @@
-# DevOps Project — AWS · EKS · Terraform · Docker · Grafana
+# DevOps Project — AWS · EKS · Terraform · ArgoCD · Docker · Grafana
 
-End-to-end infrastructure automation: multi-environment AWS infrastructure provisioned with Terraform, containerized app deployed on EKS via Kubernetes, full CI/CD pipeline with GitHub Actions, and observability through Prometheus + Grafana.
+End-to-end infrastructure automation: multi-environment AWS infrastructure provisioned with Terraform, containerized app deployed on EKS via GitOps with ArgoCD, CI/CD pipeline with GitHub Actions, and observability through Prometheus + Grafana.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    GitHub Actions                    │
-│   Terraform Pipeline          Deploy Pipeline        │
-│   (plan → apply per env)      (build → dev → stg → prod) │
-└──────────────┬───────────────────────┬──────────────┘
-               │                       │
+┌─────────────────────────────────────────────────────────────┐
+│                       GitHub Actions                         │
+│   Terraform Pipeline         Deploy Pipeline                 │
+│   (plan → apply per env)     (build → commit tag → sync)    │
+└──────────────┬───────────────────────┬──────────────────────┘
+               │                       │ image tag commit
                ▼                       ▼
 ┌──────────────────────┐   ┌────────────────────────────┐
 │   AWS Infrastructure  │   │     Amazon ECR             │
 │                       │   │     (Docker Images)        │
-│  VPC (3-tier subnets) │   └─────────────┬──────────────┘
-│  EKS Cluster          │                 │
-│  RDS MySQL (Multi-AZ) │                 ▼
-│  IAM Roles            │   ┌────────────────────────────┐
-│  Security Groups      │   │  Kubernetes (EKS)          │
-└──────────────────────┘   │                            │
+│  VPC (3-tier subnets) │   └────────────────────────────┘
+│  EKS Cluster          │
+│  RDS MySQL (Multi-AZ) │   ┌────────────────────────────┐
+│  IAM Roles            │   │  ArgoCD (in-cluster)       │
+│  Security Groups      │   │                            │
+└──────────────────────┘   │  Watches Git repo          │
+                            │  Auto-syncs dev            │
+                            │  Manual sync staging/prod  │
+                            └─────────────┬──────────────┘
+                                          │ kubectl apply
+                                          ▼
+                            ┌────────────────────────────┐
+                            │  Kubernetes (EKS)          │
+                            │                            │
                             │  App Deployment (HPA)      │
                             │  Ingress (ALB)             │
                             │  Monitoring Namespace      │
@@ -45,6 +53,10 @@ devops-project/
 │       ├── staging/           # Staging environment (t3.large nodes)
 │       └── prod/              # Prod environment (t3.xlarge, Multi-AZ RDS)
 ├── backends/                  # S3 + DynamoDB remote state backend
+├── argocd/
+│   ├── install/               # ArgoCD Helm values
+│   ├── projects/              # AppProject (RBAC scoping)
+│   └── applications/          # Application manifests (dev/staging/prod)
 ├── kubernetes/
 │   ├── base/                  # Deployment, Service, Ingress, HPA
 │   ├── overlays/              # Kustomize patches per environment
@@ -107,13 +119,38 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
   -f kubernetes/monitoring/grafana-values.yaml
 ```
 
-### 5. Deploy Application
+### 5. Bootstrap ArgoCD
+
+ArgoCD is installed by Terraform (runs automatically during `terraform apply`). To access the UI:
 
 ```bash
-kubectl apply -k kubernetes/overlays/dev
+# Get initial admin password
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+
+# Port-forward if not using ingress
+kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
-### 6. Run Locally with Docker Compose
+ArgoCD Applications are applied by Terraform. To manually apply them:
+
+```bash
+kubectl apply -f argocd/projects/devops-project.yaml
+kubectl apply -f argocd/applications/dev.yaml
+kubectl apply -f argocd/applications/staging.yaml
+kubectl apply -f argocd/applications/prod.yaml
+```
+
+### 6. Deploy Application
+
+Dev syncs automatically once ArgoCD detects a Git change. For staging/prod, use the ArgoCD UI or CLI:
+
+```bash
+argocd app sync devops-staging
+argocd app sync devops-prod
+```
+
+### 7. Run Locally with Docker Compose
 
 ```bash
 cd docker
@@ -127,7 +164,22 @@ Access: App → http://localhost:5000 | Grafana → http://localhost:3000 | Prom
 | Trigger | Pipeline |
 |---------|----------|
 | Push to `main` with changes in `Terraform/` | Terraform plan + apply for all environments |
-| Push to `main` with changes in `App/`, `docker/`, `kubernetes/` | Build image → Deploy dev → staging → prod (sequential with approvals) |
+| Push to `main` with changes in `App/`, `docker/`, `kubernetes/` | Build image → commit tag → ArgoCD auto-syncs dev → approval gates for staging/prod |
+
+### GitOps Flow
+
+```
+Developer pushes code
+    ↓
+GitHub Actions builds Docker image → pushes to ECR
+    ↓
+GitHub Actions commits updated image tag to kubernetes/overlays/*/kustomization.yaml
+    ↓
+ArgoCD detects Git change
+    ├── dev:     auto-syncs immediately (selfHeal + prune enabled)
+    ├── staging: waits for manual sync (GitHub Environment approval → argocd app sync)
+    └── prod:    waits for manual sync (GitHub Environment approval → argocd app sync)
+```
 
 ### Required GitHub Secrets
 
@@ -137,6 +189,18 @@ Access: App → http://localhost:5000 | Grafana → http://localhost:3000 | Prom
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `AWS_ACCOUNT_ID` | AWS account ID (for ECR URL) |
 | `DB_PASSWORD` | RDS master password |
+| `ARGOCD_SERVER` | ArgoCD server hostname (e.g. `argocd.example.com`) |
+| `ARGOCD_AUTH_TOKEN` | ArgoCD API token for the `deployer` role |
+
+## ArgoCD
+
+| App | Sync Policy | Path |
+|-----|-------------|------|
+| `devops-dev` | Automatic (prune + selfHeal) | `kubernetes/overlays/dev` |
+| `devops-staging` | Manual | `kubernetes/overlays/staging` |
+| `devops-prod` | Manual | `kubernetes/overlays/prod` |
+
+All three apps live in the `devops-project` AppProject, which limits source repos and destination namespaces.
 
 ## Environment Differences
 
