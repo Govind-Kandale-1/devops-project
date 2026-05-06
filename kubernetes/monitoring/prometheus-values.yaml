@@ -9,6 +9,31 @@ prometheus:
           resources:
             requests:
               storage: 20Gi
+
+    # Remote-write all scraped metrics to Mimir.
+    # X-Scope-OrgID isolates each environment's data into its own tenant.
+    # The tenant ID (dev / staging / prod) is set in the mimir-tenant-id ConfigMap
+    # created by the Terraform mimir module.
+    remoteWrite:
+      - url: http://mimir-nginx.monitoring.svc.cluster.local/api/v1/push
+        headers:
+          X-Scope-OrgID: $(MIMIR_TENANT_ID)
+        queueConfig:
+          capacity: 10000
+          maxSamplesPerSend: 5000
+          batchSendDeadline: 5s
+          minBackoff: 30ms
+          maxBackoff: 100ms
+
+    containers:
+      - name: prometheus
+        env:
+          - name: MIMIR_TENANT_ID
+            valueFrom:
+              configMapKeyRef:
+                name: mimir-tenant-id
+                key: tenant_id
+
     additionalScrapeConfigs:
       - job_name: app
         kubernetes_sd_configs:

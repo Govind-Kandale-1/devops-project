@@ -7,3 +7,34 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: true
+
+  # Mimir per-tenant datasources for local dev (docker-compose)
+  - name: Mimir-Dev
+    type: prometheus
+    access: proxy
+    url: http://mimir:8080/prometheus
+    editable: true
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: dev
+
+  - name: Mimir-Staging
+    type: prometheus
+    access: proxy
+    url: http://mimir:8080/prometheus
+    editable: true
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: staging
+
+  - name: Mimir-Prod
+    type: prometheus
+    access: proxy
+    url: http://mimir:8080/prometheus
+    editable: true
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: prod

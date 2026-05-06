@@ -4,6 +4,39 @@ grafana:
     enabled: true
     storageClassName: gp2
     size: 5Gi
+
+  # Per-tenant Mimir datasources — each env queries only its own metrics
+  additionalDataSources:
+    - name: Mimir-Dev
+      type: prometheus
+      url: http://mimir-nginx.monitoring.svc.cluster.local/prometheus
+      access: proxy
+      jsonData:
+        httpHeaderName1: X-Scope-OrgID
+      secureJsonData:
+        httpHeaderValue1: dev
+      editable: false
+
+    - name: Mimir-Staging
+      type: prometheus
+      url: http://mimir-nginx.monitoring.svc.cluster.local/prometheus
+      access: proxy
+      jsonData:
+        httpHeaderName1: X-Scope-OrgID
+      secureJsonData:
+        httpHeaderValue1: staging
+      editable: false
+
+    - name: Mimir-Prod
+      type: prometheus
+      url: http://mimir-nginx.monitoring.svc.cluster.local/prometheus
+      access: proxy
+      jsonData:
+        httpHeaderName1: X-Scope-OrgID
+      secureJsonData:
+        httpHeaderValue1: prod
+      editable: false
+
   dashboardProviders:
     dashboardproviders.yaml:
       apiVersion: 1
@@ -15,6 +48,14 @@ grafana:
           disableDeletion: false
           options:
             path: /var/lib/grafana/dashboards/default
+        - name: mimir
+          orgId: 1
+          folder: "Mimir"
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards/mimir
+
   dashboards:
     default:
       kubernetes-cluster:
@@ -27,3 +68,8 @@ grafana:
         datasource: Prometheus
       app-dashboard:
         url: https://raw.githubusercontent.com/Govind-Kandale-1/devops-project/main/monitoring/grafana/dashboards/app-dashboard.json
+    mimir:
+      mimir-overview:
+        gnetId: 17781
+        revision: 2
+        datasource: Mimir-Prod

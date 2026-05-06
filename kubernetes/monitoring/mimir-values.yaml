@@ -1,0 +1,123 @@
+# Grafana Mimir — monolithic (single-binary) mode with S3 backend
+# Multi-tenancy enabled: each environment sends metrics under its own tenant ID.
+# Tenants: dev, staging, prod — isolated at query and storage level.
+
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: ${replicas}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  persistentVolume:
+    enabled: true
+    size: ${storage_size}
+    storageClass: gp2
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "${irsa_role_arn}"
+
+mimir:
+  structuredConfig:
+    multitenancy_enabled: true
+
+    common:
+      storage:
+        backend: s3
+        s3:
+          bucket_name: "${s3_bucket_name}"
+          region: "${aws_region}"
+          # Credentials injected via IRSA — no static keys needed
+
+    ingester:
+      ring:
+        replication_factor: 1  # Single-binary; set to 3 for HA
+
+    compactor:
+      data_dir: /data/compactor
+
+    blocks_storage:
+      backend: s3
+      s3:
+        bucket_name: "${s3_bucket_name}"
+        region: "${aws_region}"
+      tsdb:
+        dir: /data/tsdb
+
+    ruler_storage:
+      backend: s3
+      s3:
+        bucket_name: "${s3_bucket_name}"
+        region: "${aws_region}"
+
+    alertmanager_storage:
+      backend: s3
+      s3:
+        bucket_name: "${s3_bucket_name}"
+        region: "${aws_region}"
+
+    # Per-tenant limit overrides loaded from ConfigMap
+    runtime_config:
+      file: /etc/mimir/overrides.yaml
+
+    limits:
+      # Global defaults — overridden per-tenant via overrides.yaml
+      ingestion_rate: 10000
+      ingestion_burst_size: 20000
+      max_global_series_per_user: 100000
+      max_label_names_per_series: 30
+      max_label_value_length: 2048
+      # Query limits
+      max_fetched_chunks_per_query: 2000000
+      max_fetched_series_per_query: 100000
+
+# Mount the tenant overrides ConfigMap
+extraVolumes:
+  - name: tenant-overrides
+    configMap:
+      name: mimir-tenant-overrides
+
+extraVolumeMounts:
+  - name: tenant-overrides
+    mountPath: /etc/mimir/overrides.yaml
+    subPath: overrides.yaml
+    readOnly: true
+
+# Nginx gateway — single entry point for push and query traffic
+nginx:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+# Disable components not needed in single-binary mode
+distributor:
+  replicas: 0
+ingester:
+  replicas: 0
+querier:
+  replicas: 0
+query_frontend:
+  replicas: 0
+store_gateway:
+  replicas: 0
+compactor:
+  replicas: 0
+
+# Grafana Agent scraping is handled by Prometheus remote_write
+metaMonitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+
+minio:
+  enabled: false  # Using AWS S3 via IRSA

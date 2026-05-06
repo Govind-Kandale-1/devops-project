@@ -45,6 +45,17 @@ services:
       - "--storage.tsdb.retention.time=15d"
     restart: unless-stopped
 
+  mimir:
+    image: grafana/mimir:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../monitoring/mimir/mimir-local.yaml:/etc/mimir/mimir.yaml
+      - mimir_data:/data
+    command:
+      - "--config.file=/etc/mimir/mimir.yaml"
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:latest
     ports:
@@ -57,9 +68,11 @@ services:
       - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
+      - mimir
     restart: unless-stopped
 
 volumes:
   db_data:
   prometheus_data:
+  mimir_data:
   grafana_data:

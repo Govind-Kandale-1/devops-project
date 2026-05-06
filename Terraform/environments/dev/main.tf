@@ -111,3 +111,18 @@ module "argocd" {
 
   depends_on = [module.eks]
 }
+
+module "mimir" {
+  source = "../../modules/mimir"
+
+  environment       = var.environment
+  s3_bucket_name    = "devops-mimir-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  aws_region        = var.aws_region
+  eks_oidc_provider = module.eks.oidc_provider
+  mimir_replicas    = 1
+  storage_size      = "20Gi"
+
+  depends_on = [module.eks]
+}
+
+data "aws_caller_identity" "current" {}
